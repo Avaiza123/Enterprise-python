@@ -5,9 +5,11 @@ Black-box API regression tests, run by the pipeline AFTER a deploy
 Usage in CI:
     API_BASE_URL=https://dev.example.com pytest tests/test_api.py
 """
+
 import os
-import requests
+
 import pytest
+import requests
 
 BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
 

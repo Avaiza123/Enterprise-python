@@ -5,6 +5,7 @@ All secrets (DB password, JWT secret, API keys) are injected as CI/CD
 variables (masked + protected) in GitLab and surfaced to the app as
 environment variables at deploy time -- never committed to the repo.
 """
+
 from pydantic_settings import BaseSettings
 
 

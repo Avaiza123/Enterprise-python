@@ -6,7 +6,8 @@ production release, e.g.:
            -u 50 -r 5 -t 1m --host $API_BASE_URL \
            --csv=perf-report --exit-code-on-error 1
 """
-from locust import HttpUser, task, between
+
+from locust import HttpUser, between, task
 
 
 class ApiUser(HttpUser):

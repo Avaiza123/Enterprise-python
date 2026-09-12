@@ -4,7 +4,9 @@ Demonstrates GitLab 'Scheduled Jobs' capability: a pipeline can be triggered
 on a cron schedule (GitLab Schedules) to run housekeeping / health-check jobs,
 independent of the always-on Celery beat schedule used at runtime.
 """
+
 from celery import Celery
+
 from app.config import settings
 
 celery_app = Celery("enterprise_demo", broker=settings.celery_broker_url)

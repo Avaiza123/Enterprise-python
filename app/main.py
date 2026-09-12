@@ -4,14 +4,16 @@ A small FastAPI service used to demonstrate a full GitLab CI/CD pipeline:
 source control -> code review -> CI -> security scan -> CD -> release ->
 change mgmt -> monitoring -> rollback -> compliance/audit.
 """
-from fastapi import FastAPI, HTTPException, Depends
-from sqlalchemy.orm import Session
-from datetime import datetime
-import os
 
-from app.database import get_db, engine, Base
+import os
+from datetime import datetime
+
+from fastapi import Depends, FastAPI, HTTPException
+from sqlalchemy.orm import Session
+
 from app import models
 from app.config import settings
+from app.database import Base, engine, get_db
 
 app = FastAPI(
     title="Enterprise Python Demo",
