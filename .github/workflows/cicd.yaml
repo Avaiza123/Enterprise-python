@@ -216,18 +216,18 @@ jobs:
           image-ref: ${{ env.IMAGE_NAME }}:${{ needs.build.outputs.image_tag }}
           format: table
           severity: HIGH,CRITICAL
-          exit-code: '0'   # informational only; change to '1' to fail on findings
+          exit-code: '0'
 
 
   # ==========================================================
-  # 5. TERRAFORM PLAN (ubuntu-latest) — only if terraform/ has real configs
+  # 5. TERRAFORM PLAN (ubuntu-latest)
   # ==========================================================
   terraform-plan:
     name: Terraform Plan
     runs-on: ubuntu-latest
     needs: build
     if: github.ref == 'refs/heads/master'
-    continue-on-error: true   # disable once TF backend is configured
+    continue-on-error: true
     defaults:
       run:
         working-directory: terraform
@@ -335,7 +335,7 @@ jobs:
 
 
   # ==========================================================
-  # 8. API REGRESSION (Windows) — against localhost:8000
+  # 8. API REGRESSION (Windows)
   # ==========================================================
   api-test-dev:
     name: API Regression (DEV)
@@ -388,7 +388,7 @@ jobs:
     runs-on: [self-hosted, Windows, X64]
     needs: api-test-dev
     environment:
-      name: uat        # ← configure "Required reviewers" in repo settings
+      name: uat
       url: http://localhost:8001
     if: github.ref == 'refs/heads/master'
     steps:
@@ -450,7 +450,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: migrate-uat
     if: github.ref == 'refs/heads/master'
-    continue-on-error: true   # informational until UAT has a public URL
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -503,7 +503,7 @@ jobs:
     runs-on: [self-hosted, Windows, X64]
     needs: change-approval-gate
     environment:
-      name: production    # ← configure "Required reviewers" in repo settings
+      name: production
       url: http://localhost:8000
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
@@ -582,13 +582,18 @@ jobs:
     if: always() && github.ref == 'refs/heads/master'
     steps:
       - name: Send notification
-        if: ${{ secrets.SLACK_WEBHOOK_URL != '' }}
         shell: powershell
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
+          if (-not $env:SLACK_WEBHOOK_URL) {
+            Write-Host "SLACK_WEBHOOK_URL not set — skipping notification."
+            exit 0
+          }
           $payload = @{
             text = "Enterprise-python CI/CD: ${{ job.status }} on ${{ github.ref_name }} (${{ github.sha }})"
           } | ConvertTo-Json
-          Invoke-RestMethod -Uri "${{ secrets.SLACK_WEBHOOK_URL }}" -Method Post `
+          Invoke-RestMethod -Uri $env:SLACK_WEBHOOK_URL -Method Post `
             -ContentType "application/json" -Body $payload
 
 
