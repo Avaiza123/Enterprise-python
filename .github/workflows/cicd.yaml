@@ -546,12 +546,11 @@ jobs:
 
       - name: Login to GitHub Container Registry
         shell: powershell
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          "${{ secrets.GITHUB_TOKEN }}" |
-            docker login ghcr.io `
-              -u "${{ github.actor }}" `
-              --password-stdin
-
+          $token = $env:GHCR_TOKEN
+          $token | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
           if ($LASTEXITCODE -ne 0) {
               throw "GHCR login failed."
           }
