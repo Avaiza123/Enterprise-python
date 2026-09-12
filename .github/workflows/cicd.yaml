@@ -723,12 +723,11 @@ jobs:
     steps:
 
       - name: Login to GHCR
-        shell: powershell
-        run: |
-          "${{ secrets.GHCR_PAT }}" |
-            docker login ghcr.io `
-              -u "${{ github.actor }}" `
-              --password-stdin
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GHCR_PAT }}
 
       - name: Stop Existing Development Container
         shell: powershell
@@ -1007,12 +1006,11 @@ jobs:
     steps:
 
       - name: Login to GHCR
-        shell: powershell
-        run: |
-          "${{ secrets.GHCR_PAT }}" |
-            docker login ghcr.io `
-              -u "${{ github.actor }}" `
-              --password-stdin
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GHCR_PAT }}
 
       - name: Stop Existing UAT Container
         shell: powershell
@@ -1291,12 +1289,11 @@ jobs:
     steps:
 
       - name: Login to GHCR
-        shell: powershell
-        run: |
-          "${{ secrets.GHCR_PAT }}" |
-            docker login ghcr.io `
-              -u "${{ github.actor }}" `
-              --password-stdin
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GHCR_PAT }}
 
       - name: Stop Existing Production Container
         shell: powershell
@@ -1647,16 +1644,13 @@ jobs:
     steps:
 
       - name: Login to GHCR
-        shell: powershell
-        run: |
-          "${{ secrets.GHCR_PAT }}" |
-            docker login ghcr.io `
-              -u "${{ github.actor }}" `
-              --password-stdin
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GHCR_PAT }}
 
-          if ($LASTEXITCODE -ne 0) {
-              throw "GHCR login failed."
-          }
+         
 
       - name: Stop Current Production
         shell: powershell
