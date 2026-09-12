@@ -13,3 +13,13 @@ perf-report*.csv
 dist/
 build/
 *.egg-info/
+
+# Test and build artifacts
+.pytest_cache/
+.coverage
+local.db
+.local-venv/
+*.pyc
+__pycache__/
+coverage.xml
+test-results.xml
