@@ -756,6 +756,7 @@ jobs:
             --name enterprise-python-dev `
             --restart unless-stopped `
             -p 8000:8000 `
+            -e DATABASE_URL="${{ secrets.DEV_DATABASE_URL }}" `
             $image
 
           if ($LASTEXITCODE -ne 0) {
@@ -1039,6 +1040,7 @@ jobs:
             --name enterprise-python-uat `
             --restart unless-stopped `
             -p 8001:8000 `
+            -e DATABASE_URL="${{ secrets.UAT_DATABASE_URL }}" `
             $image
 
           if ($LASTEXITCODE -ne 0) {
@@ -1325,6 +1327,7 @@ jobs:
             --name enterprise-python-prod `
             --restart unless-stopped `
             -p 8002:8000 `
+            -e DATABASE_URL="${{ secrets.PROD_DATABASE_URL }}" `
             $image
 
           if ($LASTEXITCODE -ne 0) {
@@ -1682,6 +1685,7 @@ jobs:
             --name enterprise-python-prod `
             --restart unless-stopped `
             -p 8002:8000 `
+            -e DATABASE_URL="${{ secrets.PROD_DATABASE_URL }}" `
             $image
 
           if ($LASTEXITCODE -ne 0) {
