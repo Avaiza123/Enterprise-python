@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: enterprise-demo-api
+  labels:
+    app: enterprise-demo-api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: enterprise-demo-api
+  template:
+    metadata:
+      labels:
+        app: enterprise-demo-api
+    spec:
+      containers:
+        - name: api
+          image: registry.example.com/enterprise-python-demo:latest
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - secretRef:
+                name: enterprise-demo-secrets
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: enterprise-demo-api
+spec:
+  selector:
+    app: enterprise-demo-api
+  ports:
+    - port: 80
+      targetPort: 8000

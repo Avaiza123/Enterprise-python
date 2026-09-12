@@ -1,0 +1,16 @@
+# Approval routing (GitLab merge request approval rules).
+# Any change under these paths requires sign-off from the named group.
+
+[Backend]
+app/**            @backend-team
+alembic/**        @backend-team @dba-team
+
+[Infrastructure]
+terraform/**      @platform-team
+k8s/**            @platform-team
+.gitlab-ci.yml    @platform-team @release-managers
+
+[Security]
+scripts/**        @security-team
+
+*                 @tech-leads
