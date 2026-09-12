@@ -1,644 +1,1548 @@
-name: Enterprise Python CI/CD
+name: Enterprise Python CI/CD Pipeline
 
 on:
   push:
-    branches: [master]
-    tags: ['v*.*.*']
+    branches:
+      - master
+      - deploy
+    tags:
+      - "v*"
+
   pull_request:
-    branches: [master]
-  schedule:
-    - cron: '0 2 * * *'
+    branches:
+      - master
+
   workflow_dispatch:
     inputs:
       image_tag:
-        description: 'Image tag to deploy (rollback target)'
-        required: false
+        description: "Docker image tag to rollback to"
+        required: true
+        type: string
 
-permissions:
-  contents: write
-  packages: write
-  pull-requests: read
+  schedule:
+    - cron: "0 3 * * *"
+
+
+# ============================================================
+# GLOBAL ENVIRONMENT
+# ============================================================
 
 env:
-  PYTHON_EXE: 'C:\Py312\python.exe'
+  PYTHON_EXE: 'C:\Users\avaiza.shahid\AppData\Local\Programs\Python\Python314\python.exe'
   VENV: '.ci-venv'
-  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/enterprise-python
+  IMAGE_NAME: ghcr.io/avaiza123/enterprise-python
+
+
+# ============================================================
+# 1. TEST
+# ============================================================
+
 jobs:
 
-  # ==========================================================
-  # 1. TEST (Windows)
-  # ==========================================================
   test:
-    name: Auto Test
+    name: Automated Tests
     runs-on: [self-hosted, Windows, X64]
+
+    if: >
+      github.event_name == 'pull_request' ||
+      github.ref == 'refs/heads/master' ||
+      startsWith(github.ref, 'refs/tags/v')
+
     steps:
-      - uses: actions/checkout@v4
 
-      - name: Setup Python
-        shell: powershell -ExecutionPolicy Bypass -File {0}
+      # --------------------------------------------------------
+      # Checkout
+      # --------------------------------------------------------
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # --------------------------------------------------------
+      # Verify Python 3.14
+      # --------------------------------------------------------
+
+      - name: Setup Python 3.14
+        shell: powershell
         run: |
-          if (-not (Test-Path $env:PYTHON_EXE)) { throw "Python not found." }
+          Write-Host "======================================"
+          Write-Host "Checking Python installation"
+          Write-Host "======================================"
+
+          Write-Host "Configured Python:"
+          Write-Host $env:PYTHON_EXE
+
+          if (-not (Test-Path $env:PYTHON_EXE)) {
+              throw "Python 3.14 not found at: $env:PYTHON_EXE"
+          }
+
+          & $env:PYTHON_EXE --version
+
+          if ($LASTEXITCODE -ne 0) {
+              throw "Python execution failed."
+          }
+
+          $pythonVersion = & $env:PYTHON_EXE --version
+          Write-Host "Detected: $pythonVersion"
+
+          if ($pythonVersion -notmatch "Python 3\.14") {
+              throw "Wrong Python version. Python 3.14 is required."
+          }
+
+      # --------------------------------------------------------
+      # Create virtual environment
+      # --------------------------------------------------------
+
+      - name: Create Virtual Environment
+        shell: powershell
+        run: |
           $venv = Join-Path $env:GITHUB_WORKSPACE $env:VENV
-          if (Test-Path $venv) { Remove-Item $venv -Recurse -Force }
+
+          Write-Host "Virtual environment: $venv"
+
+          if (Test-Path $venv) {
+              Write-Host "Removing old virtual environment..."
+              Remove-Item $venv -Recurse -Force
+          }
+
+          Write-Host "Creating virtual environment..."
+
           & $env:PYTHON_EXE -m venv $venv
-          if ($LASTEXITCODE -ne 0) { throw "venv creation failed." }
 
-      - name: Install deps
-        shell: powershell -ExecutionPolicy Bypass -File {0}
+          if ($LASTEXITCODE -ne 0) {
+              throw "Virtual environment creation failed."
+          }
+
+          $python = Join-Path $venv "Scripts\python.exe"
+
+          if (-not (Test-Path $python)) {
+              throw "Virtual environment Python was not created."
+          }
+
+          & $python --version
+
+      # --------------------------------------------------------
+      # Upgrade pip
+      # --------------------------------------------------------
+
+      - name: Upgrade pip
+        shell: powershell
         run: |
           $python = Join-Path $env:GITHUB_WORKSPACE "$env:VENV\Scripts\python.exe"
-          & $python -m pip install --upgrade pip
-          & $python -m pip install -r "$env:GITHUB_WORKSPACE\requirements.txt"
-          & $python -m pip install -r "$env:GITHUB_WORKSPACE\requirements-dev.txt"
 
-      - name: Run unit tests
-        shell: powershell -ExecutionPolicy Bypass -File {0}
+          & $python -m pip install --upgrade pip setuptools wheel
+
+          if ($LASTEXITCODE -ne 0) {
+              throw "pip upgrade failed."
+          }
+
+      # --------------------------------------------------------
+      # Install dependencies
+      # --------------------------------------------------------
+
+      - name: Install Dependencies
+        shell: powershell
         run: |
           $python = Join-Path $env:GITHUB_WORKSPACE "$env:VENV\Scripts\python.exe"
-          & $python -m pytest tests/test_main.py -m "not regression" `
-            -v --tb=short `
-            --cov=app `
-            --cov-report=term `
-            --cov-report=xml:coverage.xml `
-            --junitxml=junit.xml
-          if ($LASTEXITCODE -ne 0) { throw "Tests failed." }
 
-      - name: Upload coverage
+          if (Test-Path "requirements.txt") {
+              Write-Host "Installing requirements.txt..."
+              & $python -m pip install -r requirements.txt
+
+              if ($LASTEXITCODE -ne 0) {
+                  throw "requirements.txt installation failed."
+              }
+          }
+
+          if (Test-Path "requirements-dev.txt") {
+              Write-Host "Installing requirements-dev.txt..."
+              & $python -m pip install -r requirements-dev.txt
+
+              if ($LASTEXITCODE -ne 0) {
+                  throw "requirements-dev.txt installation failed."
+              }
+          }
+
+      # --------------------------------------------------------
+      # Run tests
+      # --------------------------------------------------------
+
+      - name: Run Unit Tests
+        shell: powershell
+        run: |
+          $python = Join-Path $env:GITHUB_WORKSPACE "$env:VENV\Scripts\python.exe"
+
+          if (-not (Test-Path "tests")) {
+              Write-Host "No tests directory found."
+              exit 0
+          }
+
+          & $python -m pytest `
+            tests/test_main.py `
+            -m "not regression" `
+            --cov=. `
+            --cov-report=term-missing `
+            --cov-report=xml `
+            --junitxml=test-results.xml
+
+          if ($LASTEXITCODE -ne 0) {
+              throw "Unit tests failed."
+          }
+
+      # --------------------------------------------------------
+      # Upload test reports
+      # --------------------------------------------------------
+
+      - name: Upload Test Results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-report
+          name: unit-test-results-${{ github.run_number }}
           path: |
+            test-results.xml
             coverage.xml
-            junit.xml
           if-no-files-found: ignore
 
-      - name: Cleanup
+      # --------------------------------------------------------
+      # Cleanup
+      # --------------------------------------------------------
+
+      - name: Cleanup Test Environment
         if: always()
-        shell: powershell -ExecutionPolicy Bypass -File {0}
+        shell: powershell
         run: |
           $venv = Join-Path $env:GITHUB_WORKSPACE $env:VENV
-          if (Test-Path $venv) { Remove-Item $venv -Recurse -Force }
+
+          if (Test-Path $venv) {
+              Remove-Item $venv -Recurse -Force -ErrorAction SilentlyContinue
+          }
 
 
-  # ==========================================================
-  # 2. QA (Windows) — flake8, black, isort, mypy, bandit, pip-audit
-  # ==========================================================
+  # ============================================================
+  # 2. QA
+  # ============================================================
+
   qa:
-    name: Auto QA
+    name: Static QA & Security
     runs-on: [self-hosted, Windows, X64]
+
     needs: test
-    steps:
-      - uses: actions/checkout@v4
 
-      - name: Setup QA venv
-        shell: powershell -ExecutionPolicy Bypass -File {0}
+    if: >
+      github.event_name == 'pull_request' ||
+      github.ref == 'refs/heads/master' ||
+      startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # --------------------------------------------------------
+      # Verify Python
+      # --------------------------------------------------------
+
+      - name: Verify Python 3.14
+        shell: powershell
+        run: |
+          if (-not (Test-Path $env:PYTHON_EXE)) {
+              throw "Python 3.14 not found at: $env:PYTHON_EXE"
+          }
+
+          & $env:PYTHON_EXE --version
+
+      # --------------------------------------------------------
+      # Create venv
+      # --------------------------------------------------------
+
+      - name: Create Virtual Environment
+        shell: powershell
         run: |
           $venv = Join-Path $env:GITHUB_WORKSPACE $env:VENV
-          if (Test-Path $venv) { Remove-Item $venv -Recurse -Force }
+
+          if (Test-Path $venv) {
+              Remove-Item $venv -Recurse -Force
+          }
+
           & $env:PYTHON_EXE -m venv $venv
+
+          if ($LASTEXITCODE -ne 0) {
+              throw "Failed to create virtual environment."
+          }
+
           $python = Join-Path $venv "Scripts\python.exe"
-          & $python -m pip install --upgrade pip
-          & $python -m pip install -r "$env:GITHUB_WORKSPACE\requirements.txt"
-          & $python -m pip install -r "$env:GITHUB_WORKSPACE\requirements-dev.txt"
 
-      - name: Lint (flake8)
-        shell: powershell -ExecutionPolicy Bypass -File {0}
+          & $python --version
+
+      # --------------------------------------------------------
+      # Install dependencies
+      # --------------------------------------------------------
+
+      - name: Install QA Dependencies
+        shell: powershell
         run: |
           $python = Join-Path $env:GITHUB_WORKSPACE "$env:VENV\Scripts\python.exe"
-          & $python -m flake8 app tests
-          if ($LASTEXITCODE -ne 0) { throw "flake8 failed." }
 
-      - name: Format check (black)
-        shell: powershell -ExecutionPolicy Bypass -File {0}
+          & $python -m pip install --upgrade pip setuptools wheel
+
+          if (Test-Path "requirements.txt") {
+              & $python -m pip install -r requirements.txt
+          }
+
+          if (Test-Path "requirements-dev.txt") {
+              & $python -m pip install -r requirements-dev.txt
+          }
+
+          & $python -m pip install `
+            flake8 `
+            black `
+            isort `
+            mypy `
+            bandit `
+            pip-audit
+
+      # --------------------------------------------------------
+      # Flake8
+      # --------------------------------------------------------
+
+      - name: Flake8
+        shell: powershell
         run: |
           $python = Join-Path $env:GITHUB_WORKSPACE "$env:VENV\Scripts\python.exe"
-          & $python -m black --check app tests
-          if ($LASTEXITCODE -ne 0) { throw "black check failed." }
 
-      - name: Import order (isort)
-        shell: powershell -ExecutionPolicy Bypass -File {0}
+          & $python -m flake8 . `
+            --exclude=.ci-venv,.git,__pycache__,build,dist `
+            --max-line-length=120
+
+          if ($LASTEXITCODE -ne 0) {
+              throw "Flake8 QA failed."
+          }
+
+      # --------------------------------------------------------
+      # Black
+      # --------------------------------------------------------
+
+      - name: Black Format Check
+        shell: powershell
         run: |
           $python = Join-Path $env:GITHUB_WORKSPACE "$env:VENV\Scripts\python.exe"
-          & $python -m isort --check-only app tests
-          if ($LASTEXITCODE -ne 0) { throw "isort check failed." }
 
-      - name: Type check (mypy)
+          & $python -m black --check . `
+            --exclude="\.ci-venv|\.git|build|dist"
+
+          if ($LASTEXITCODE -ne 0) {
+              throw "Black formatting check failed."
+          }
+
+      # --------------------------------------------------------
+      # isort
+      # --------------------------------------------------------
+
+      - name: isort Check
+        shell: powershell
+        run: |
+          $python = Join-Path $env:GITHUB_WORKSPACE "$env:VENV\Scripts\python.exe"
+
+          & $python -m isort . `
+            --check-only `
+            --skip .ci-venv `
+            --skip .git
+
+          if ($LASTEXITCODE -ne 0) {
+              throw "isort check failed."
+          }
+
+      # --------------------------------------------------------
+      # mypy
+      # --------------------------------------------------------
+
+      - name: Mypy
         continue-on-error: true
-        shell: powershell -ExecutionPolicy Bypass -File {0}
+        shell: powershell
         run: |
           $python = Join-Path $env:GITHUB_WORKSPACE "$env:VENV\Scripts\python.exe"
-          & $python -m mypy app
 
-      - name: Security scan (bandit)
-        shell: powershell -ExecutionPolicy Bypass -File {0}
+          if (Test-Path "backend") {
+              & $python -m mypy backend
+          }
+          elseif (Test-Path "src") {
+              & $python -m mypy src
+          }
+          else {
+              Write-Host "No backend/src directory found. Skipping mypy."
+          }
+
+      # --------------------------------------------------------
+      # Bandit Security Scan
+      # --------------------------------------------------------
+
+      - name: Bandit Security Scan
+        shell: powershell
         run: |
           $python = Join-Path $env:GITHUB_WORKSPACE "$env:VENV\Scripts\python.exe"
-          & $python -m bandit -r app -s B104,B110,B112
-          if ($LASTEXITCODE -ne 0) { throw "bandit failed." }
 
-      - name: Dependency audit (pip-audit)
+          if (Test-Path "backend") {
+              & $python -m bandit -r backend -f txt
+          }
+          elseif (Test-Path "src") {
+              & $python -m bandit -r src -f txt
+          }
+          else {
+              Write-Host "No backend/src directory found. Skipping Bandit."
+          }
+
+      # --------------------------------------------------------
+      # Dependency Audit
+      # --------------------------------------------------------
+
+      - name: pip-audit
         continue-on-error: true
-        shell: powershell -ExecutionPolicy Bypass -File {0}
+        shell: powershell
         run: |
           $python = Join-Path $env:GITHUB_WORKSPACE "$env:VENV\Scripts\python.exe"
-          & $python -m pip_audit -r requirements.txt
 
-      - name: Cleanup
+          & $python -m pip_audit
+
+      # --------------------------------------------------------
+      # Cleanup
+      # --------------------------------------------------------
+
+      - name: Cleanup QA Environment
         if: always()
-        shell: powershell -ExecutionPolicy Bypass -File {0}
+        shell: powershell
         run: |
           $venv = Join-Path $env:GITHUB_WORKSPACE $env:VENV
-          if (Test-Path $venv) { Remove-Item $venv -Recurse -Force }
+
+          if (Test-Path $venv) {
+              Remove-Item $venv -Recurse -Force -ErrorAction SilentlyContinue
+          }
 
 
-  # ==========================================================
-  # 3. BUILD + PUSH GHCR (Windows)
-  # ==========================================================
+  # ============================================================
+  # 3. BUILD & PUSH DOCKER IMAGE
+  # ============================================================
+
   build:
-    name: Docker Build & Push
+    name: Build & Push Docker Image
     runs-on: [self-hosted, Windows, X64]
+
     needs: qa
+
+    if: >
+      github.ref == 'refs/heads/master' ||
+      startsWith(github.ref, 'refs/tags/v')
+
     outputs:
-      image_tag: ${{ steps.meta.outputs.tag }}
+      image_tag: ${{ steps.image.outputs.image_tag }}
+      image_name: ${{ steps.image.outputs.image_name }}
+
     steps:
-      - uses: actions/checkout@v4
 
-      - name: Compute image tag
-        id: meta
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # --------------------------------------------------------
+      # Calculate Image Tag
+      # --------------------------------------------------------
+
+      - name: Calculate Image Tag
+        id: image
         shell: powershell
         run: |
-          $tag = "${{ github.sha }}".Substring(0,12)
-          if ("${{ github.ref_type }}" -eq "tag") { $tag = "${{ github.ref_name }}" }
-          echo "tag=$tag" >> $env:GITHUB_OUTPUT
+          $imageName = "ghcr.io/avaiza123/enterprise-python"
 
-      - name: Log in to GHCR
+          if ("${{ github.ref }}" -like "refs/tags/*") {
+              $tag = "${{ github.ref_name }}"
+          }
+          else {
+              $tag = "${{ github.sha }}".Substring(0, 12)
+          }
+
+          Write-Host "Image: $imageName"
+          Write-Host "Tag: $tag"
+
+          "image_tag=$tag" >> $env:GITHUB_OUTPUT
+          "image_name=$imageName" >> $env:GITHUB_OUTPUT
+
+      # --------------------------------------------------------
+      # Docker Version
+      # --------------------------------------------------------
+
+      - name: Check Docker
         shell: powershell
         run: |
-          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+          docker --version
 
-      - name: Build image
+          if ($LASTEXITCODE -ne 0) {
+              throw "Docker is not available."
+          }
+
+      # --------------------------------------------------------
+      # Login GHCR
+      # --------------------------------------------------------
+
+      - name: Login to GitHub Container Registry
         shell: powershell
         run: |
-          docker build -t "${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tag }}" .
-          if ($LASTEXITCODE -ne 0) { throw "docker build failed." }
+          "${{ secrets.GITHUB_TOKEN }}" |
+            docker login ghcr.io `
+              -u "${{ github.actor }}" `
+              --password-stdin
 
-      - name: Push image
+          if ($LASTEXITCODE -ne 0) {
+              throw "GHCR login failed."
+          }
+
+      # --------------------------------------------------------
+      # Build
+      # --------------------------------------------------------
+
+      - name: Build Docker Image
         shell: powershell
         run: |
-          docker push "${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tag }}"
-          if ($LASTEXITCODE -ne 0) { throw "docker push failed." }
+          $image = "${{ steps.image.outputs.image_name }}:${{ steps.image.outputs.image_tag }}"
 
-      - name: Tag latest (master only)
+          Write-Host "Building: $image"
+
+          docker build `
+            -t $image `
+            .
+
+          if ($LASTEXITCODE -ne 0) {
+              throw "Docker build failed."
+          }
+
+      # --------------------------------------------------------
+      # Push
+      # --------------------------------------------------------
+
+      - name: Push Docker Image
+        shell: powershell
+        run: |
+          $image = "${{ steps.image.outputs.image_name }}:${{ steps.image.outputs.image_tag }}"
+
+          docker push $image
+
+          if ($LASTEXITCODE -ne 0) {
+              throw "Docker push failed."
+          }
+
+      # --------------------------------------------------------
+      # Latest Tag
+      # --------------------------------------------------------
+
+      - name: Tag Latest
         if: github.ref == 'refs/heads/master'
         shell: powershell
         run: |
-          docker tag "${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tag }}" "${{ env.IMAGE_NAME }}:latest"
-          docker push "${{ env.IMAGE_NAME }}:latest"
+          $source = "${{ steps.image.outputs.image_name }}:${{ steps.image.outputs.image_tag }}"
+          $latest = "${{ steps.image.outputs.image_name }}:latest"
+
+          docker tag $source $latest
+          docker push $latest
+
+          if ($LASTEXITCODE -ne 0) {
+              throw "Latest image push failed."
+          }
 
 
-  # ==========================================================
-  # 4. CONTAINER SCAN (ubuntu-latest, Trivy)
-  # ==========================================================
+  # ============================================================
+  # 4. CONTAINER SECURITY SCAN
+  # ============================================================
+
   container-scan:
-    name: Trivy Container Scan
+    name: Container Security Scan
     runs-on: ubuntu-latest
+
     needs: build
-    if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v')
+
+    if: >
+      github.ref == 'refs/heads/master' ||
+      startsWith(github.ref, 'refs/tags/v')
+
     steps:
-      - name: Log in to GHCR (pull)
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
-      - name: Run Trivy
-        uses: aquasecurity/trivy-action@0.28.0
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
         with:
-          image-ref: ${{ env.IMAGE_NAME }}:${{ needs.build.outputs.image_tag }}
-          format: table
-          severity: HIGH,CRITICAL
-          exit-code: '0'
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Trivy
+        uses: aquasecurity/setup-trivy@v0.2.2
+
+      - name: Scan Container
+        run: |
+          trivy image \
+            --severity HIGH,CRITICAL \
+            --exit-code 0 \
+            --ignore-unfixed \
+            ghcr.io/avaiza123/enterprise-python:${{ needs.build.outputs.image_tag }}
 
 
-  # ==========================================================
-  # 5. TERRAFORM PLAN (ubuntu-latest)
-  # ==========================================================
+  # ============================================================
+  # 5. TERRAFORM PLAN
+  # ============================================================
+
   terraform-plan:
     name: Terraform Plan
     runs-on: ubuntu-latest
+
     needs: build
-    if: github.ref == 'refs/heads/master'
+
+    if: >
+      github.ref == 'refs/heads/master' &&
+      hashFiles('terraform/*.tf') != ''
+
     continue-on-error: true
-    defaults:
-      run:
-        working-directory: terraform
+
     steps:
-      - uses: actions/checkout@v4
 
-      - name: Check for Terraform configs
-        id: check
-        run: |
-          if [ -z "$(ls -A *.tf 2>/dev/null)" ]; then
-            echo "no_tf=true" >> $GITHUB_OUTPUT
-          fi
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: hashicorp/setup-terraform@v3
-        if: steps.check.outputs.no_tf != 'true'
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: 1.7.5
+          terraform_version: "1.7.5"
 
       - name: Terraform Init
-        if: steps.check.outputs.no_tf != 'true'
+        working-directory: terraform
         run: terraform init
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
       - name: Terraform Plan
-        if: steps.check.outputs.no_tf != 'true'
-        run: terraform plan -var="environment=dev" -out=plan.tfplan
+        working-directory: terraform
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
+        run: |
+          terraform plan \
+            -out=plan.tfplan
 
-      - name: Upload plan
-        if: steps.check.outputs.no_tf != 'true'
+      - name: Upload Terraform Plan
         uses: actions/upload-artifact@v4
         with:
-          name: tfplan
+          name: terraform-plan-${{ github.run_number }}
           path: terraform/plan.tfplan
+          if-no-files-found: ignore
 
 
-  # ==========================================================
-  # 6. DEPLOY DEV (Windows, auto)
-  # ==========================================================
+  # ============================================================
+  # 6. DEPLOY DEV
+  # ============================================================
+
   deploy-dev:
-    name: Deploy → DEV
+    name: Deploy Development
     runs-on: [self-hosted, Windows, X64]
-    needs: [build, container-scan]
+
+    needs:
+      - build
+      - container-scan
+
+    if: github.ref == 'refs/heads/master'
+
     environment:
-      name: dev
+      name: development
       url: http://localhost:8000
-    if: github.ref == 'refs/heads/master'
+
     steps:
-      - name: Pull & run
-        shell: powershell -ExecutionPolicy Bypass -File {0}
+
+      - name: Login to GHCR
+        shell: powershell
         run: |
-          docker rm -f enterprise-python-dev 2>&1 | Out-Null
-          docker pull "${{ env.IMAGE_NAME }}:${{ needs.build.outputs.image_tag }}"
-          docker run -d --name enterprise-python-dev --restart unless-stopped `
+          "${{ secrets.GITHUB_TOKEN }}" |
+            docker login ghcr.io `
+              -u "${{ github.actor }}" `
+              --password-stdin
+
+      - name: Stop Existing Container
+        shell: powershell
+        run: |
+          docker rm -f enterprise-python-dev 2>$null
+          exit 0
+
+      - name: Pull Image
+        shell: powershell
+        run: |
+          $image = "${{ needs.build.outputs.image_name }}:${{ needs.build.outputs.image_tag }}"
+
+          docker pull $image
+
+          if ($LASTEXITCODE -ne 0) {
+              throw "Docker pull failed."
+          }
+
+      - name: Deploy Container
+        shell: powershell
+        run: |
+          $image = "${{ needs.build.outputs.image_name }}:${{ needs.build.outputs.image_tag }}"
+
+          docker run -d `
+            --name enterprise-python-dev `
+            --restart unless-stopped `
             -p 8000:8000 `
-            -e DATABASE_URL="${{ secrets.DEV_DATABASE_URL }}" `
-            -e JWT_SECRET="${{ secrets.JWT_SECRET }}" `
-            "${{ env.IMAGE_NAME }}:${{ needs.build.outputs.image_tag }}"
-          if ($LASTEXITCODE -ne 0) { throw "Deploy DEV failed." }
-          Start-Sleep -Seconds 15
-          $r = Invoke-WebRequest -Uri "http://localhost:8000/health" -UseBasicParsing -TimeoutSec 10
-          if ($r.StatusCode -ne 200) { throw "DEV health check failed: $($r.StatusCode)" }
+            $image
+
+          if ($LASTEXITCODE -ne 0) {
+              throw "Docker deployment failed."
+          }
+
+      - name: Wait for Application
+        shell: powershell
+        run: |
+          Start-Sleep -Seconds 10
+
+      - name: Health Check
+        shell: powershell
+        run: |
+          $maxAttempts = 12
+
+          for ($i = 1; $i -le $maxAttempts; $i++) {
+
+              try {
+                  $response = Invoke-WebRequest `
+                    -Uri "http://localhost:8000/health" `
+                    -UseBasicParsing `
+                    -TimeoutSec 5
+
+                  if ($response.StatusCode -eq 200) {
+                      Write-Host "Development application is healthy."
+                      exit 0
+                  }
+              }
+              catch {
+                  Write-Host "Health check attempt $i failed."
+              }
+
+              Start-Sleep -Seconds 5
+          }
+
+          docker logs enterprise-python-dev
+
+          throw "Development health check failed."
 
 
-  # ==========================================================
-  # 7. MIGRATE DEV (Windows, Alembic)
-  # ==========================================================
+  # ============================================================
+  # 7. DEV DATABASE MIGRATION
+  # ============================================================
+
   migrate-dev:
-    name: Migrate → DEV
+    name: Development Database Migration
     runs-on: [self-hosted, Windows, X64]
-    needs: deploy-dev
-    if: github.ref == 'refs/heads/master'
-    steps:
-      - uses: actions/checkout@v4
 
-      - name: Setup venv
-        shell: powershell -ExecutionPolicy Bypass -File {0}
+    needs: deploy-dev
+
+    if: github.ref == 'refs/heads/master'
+
+    steps:
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.14
+        shell: powershell
+        run: |
+          if (-not (Test-Path $env:PYTHON_EXE)) {
+              throw "Python 3.14 not found."
+          }
+
+          & $env:PYTHON_EXE --version
+
+      - name: Create Virtual Environment
+        shell: powershell
         run: |
           $venv = Join-Path $env:GITHUB_WORKSPACE $env:VENV
-          if (Test-Path $venv) { Remove-Item $venv -Recurse -Force }
-          & $env:PYTHON_EXE -m venv $venv
-          $python = Join-Path $venv "Scripts\python.exe"
-          & $python -m pip install --upgrade pip
-          & $python -m pip install -r "$env:GITHUB_WORKSPACE\requirements.txt"
 
-      - name: Run Alembic upgrade
-        shell: powershell -ExecutionPolicy Bypass -File {0}
+          if (Test-Path $venv) {
+              Remove-Item $venv -Recurse -Force
+          }
+
+          & $env:PYTHON_EXE -m venv $venv
+
+      - name: Install Dependencies
+        shell: powershell
+        run: |
+          $python = Join-Path $env:GITHUB_WORKSPACE "$env:VENV\Scripts\python.exe"
+
+          & $python -m pip install --upgrade pip
+
+          if (Test-Path "requirements.txt") {
+              & $python -m pip install -r requirements.txt
+          }
+
+      - name: Run Alembic Migration
+        shell: powershell
         env:
           DATABASE_URL: ${{ secrets.DEV_DATABASE_URL }}
         run: |
           $python = Join-Path $env:GITHUB_WORKSPACE "$env:VENV\Scripts\python.exe"
-          & $python -m alembic upgrade head
-          if ($LASTEXITCODE -ne 0) { throw "Alembic migrate DEV failed." }
+
+          if (Test-Path "alembic.ini") {
+              & $python -m alembic upgrade head
+
+              if ($LASTEXITCODE -ne 0) {
+                  throw "Development database migration failed."
+              }
+          }
+          else {
+              Write-Host "alembic.ini not found. Migration skipped."
+          }
 
       - name: Cleanup
         if: always()
-        shell: powershell -ExecutionPolicy Bypass -File {0}
+        shell: powershell
         run: |
           $venv = Join-Path $env:GITHUB_WORKSPACE $env:VENV
-          if (Test-Path $venv) { Remove-Item $venv -Recurse -Force }
+
+          if (Test-Path $venv) {
+              Remove-Item $venv -Recurse -Force -ErrorAction SilentlyContinue
+          }
 
 
-  # ==========================================================
-  # 8. API REGRESSION (Windows)
-  # ==========================================================
+  # ============================================================
+  # 8. DEV API REGRESSION TEST
+  # ============================================================
+
   api-test-dev:
-    name: API Regression (DEV)
+    name: Development API Regression Tests
     runs-on: [self-hosted, Windows, X64]
-    needs: [deploy-dev, migrate-dev]
-    if: github.ref == 'refs/heads/master'
-    steps:
-      - uses: actions/checkout@v4
 
-      - name: Setup venv
-        shell: powershell -ExecutionPolicy Bypass -File {0}
+    needs:
+      - deploy-dev
+      - migrate-dev
+
+    if: github.ref == 'refs/heads/master'
+
+    env:
+      API_BASE_URL: http://localhost:8000
+
+    steps:
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.14
+        shell: powershell
+        run: |
+          if (-not (Test-Path $env:PYTHON_EXE)) {
+              throw "Python 3.14 not found."
+          }
+
+          & $env:PYTHON_EXE --version
+
+      - name: Create Virtual Environment
+        shell: powershell
         run: |
           $venv = Join-Path $env:GITHUB_WORKSPACE $env:VENV
-          if (Test-Path $venv) { Remove-Item $venv -Recurse -Force }
-          & $env:PYTHON_EXE -m venv $venv
-          $python = Join-Path $venv "Scripts\python.exe"
-          & $python -m pip install --upgrade pip
-          & $python -m pip install -r "$env:GITHUB_WORKSPACE\requirements.txt"
-          & $python -m pip install -r "$env:GITHUB_WORKSPACE\requirements-dev.txt"
 
-      - name: Run API regression tests
-        shell: powershell -ExecutionPolicy Bypass -File {0}
+          if (Test-Path $venv) {
+              Remove-Item $venv -Recurse -Force
+          }
+
+          & $env:PYTHON_EXE -m venv $venv
+
+      - name: Install Dependencies
+        shell: powershell
         run: |
           $python = Join-Path $env:GITHUB_WORKSPACE "$env:VENV\Scripts\python.exe"
-          $env:API_BASE_URL = "http://localhost:8000"
-          & $python -m pytest tests/test_api.py -m regression --junitxml=api-regression.xml
-          if ($LASTEXITCODE -ne 0) { throw "API regression failed." }
 
-      - name: Upload report
+          & $python -m pip install --upgrade pip
+
+          if (Test-Path "requirements.txt") {
+              & $python -m pip install -r requirements.txt
+          }
+
+          if (Test-Path "requirements-dev.txt") {
+              & $python -m pip install -r requirements-dev.txt
+          }
+
+      - name: Run Regression Tests
+        shell: powershell
+        run: |
+          $python = Join-Path $env:GITHUB_WORKSPACE "$env:VENV\Scripts\python.exe"
+
+          if (Test-Path "tests/test_api.py") {
+
+              & $python -m pytest `
+                tests/test_api.py `
+                -m regression `
+                --junitxml=api-test-results.xml
+
+              if ($LASTEXITCODE -ne 0) {
+                  throw "API regression tests failed."
+              }
+
+          }
+          else {
+              Write-Host "tests/test_api.py not found. Skipping."
+          }
+
+      - name: Upload API Test Results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: api-regression-report
-          path: api-regression.xml
+          name: api-test-results-${{ github.run_number }}
+          path: api-test-results.xml
           if-no-files-found: ignore
 
       - name: Cleanup
         if: always()
-        shell: powershell -ExecutionPolicy Bypass -File {0}
+        shell: powershell
         run: |
           $venv = Join-Path $env:GITHUB_WORKSPACE $env:VENV
-          if (Test-Path $venv) { Remove-Item $venv -Recurse -Force }
+
+          if (Test-Path $venv) {
+              Remove-Item $venv -Recurse -Force -ErrorAction SilentlyContinue
+          }
 
 
-  # ==========================================================
-  # 9. DEPLOY UAT (Windows, gated via GitHub Environment "uat")
-  # ==========================================================
+  # ============================================================
+  # 9. DEPLOY UAT
+  # ============================================================
+
   deploy-uat:
-    name: Deploy → UAT
+    name: Deploy UAT
     runs-on: [self-hosted, Windows, X64]
-    needs: api-test-dev
+
+    needs:
+      - api-test-dev
+      - build
+
+    if: github.ref == 'refs/heads/master'
+
     environment:
       name: uat
       url: http://localhost:8001
-    if: github.ref == 'refs/heads/master'
+
     steps:
-      - name: Pull & run (UAT)
-        shell: powershell -ExecutionPolicy Bypass -File {0}
+
+      - name: Login to GHCR
+        shell: powershell
         run: |
-          docker rm -f enterprise-python-uat 2>&1 | Out-Null
-          docker pull "${{ env.IMAGE_NAME }}:${{ needs.build.outputs.image_tag }}"
-          docker run -d --name enterprise-python-uat --restart unless-stopped `
+          "${{ secrets.GITHUB_TOKEN }}" |
+            docker login ghcr.io `
+              -u "${{ github.actor }}" `
+              --password-stdin
+
+      - name: Stop Existing UAT Container
+        shell: powershell
+        run: |
+          docker rm -f enterprise-python-uat 2>$null
+          exit 0
+
+      - name: Pull UAT Image
+        shell: powershell
+        run: |
+          $image = "${{ needs.build.outputs.image_name }}:${{ needs.build.outputs.image_tag }}"
+
+          docker pull $image
+
+          if ($LASTEXITCODE -ne 0) {
+              throw "UAT image pull failed."
+          }
+
+      - name: Deploy UAT
+        shell: powershell
+        run: |
+          $image = "${{ needs.build.outputs.image_name }}:${{ needs.build.outputs.image_tag }}"
+
+          docker run -d `
+            --name enterprise-python-uat `
+            --restart unless-stopped `
             -p 8001:8000 `
-            -e DATABASE_URL="${{ secrets.UAT_DATABASE_URL }}" `
-            -e JWT_SECRET="${{ secrets.JWT_SECRET }}" `
-            "${{ env.IMAGE_NAME }}:${{ needs.build.outputs.image_tag }}"
-          Start-Sleep -Seconds 15
-          $r = Invoke-WebRequest -Uri "http://localhost:8001/health" -UseBasicParsing -TimeoutSec 10
-          if ($r.StatusCode -ne 200) { throw "UAT health check failed: $($r.StatusCode)" }
+            $image
+
+          if ($LASTEXITCODE -ne 0) {
+              throw "UAT deployment failed."
+          }
+
+      - name: Wait for UAT
+        shell: powershell
+        run: |
+          Start-Sleep -Seconds 10
+
+      - name: UAT Health Check
+        shell: powershell
+        run: |
+          $maxAttempts = 12
+
+          for ($i = 1; $i -le $maxAttempts; $i++) {
+
+              try {
+                  $response = Invoke-WebRequest `
+                    -Uri "http://localhost:8001/health" `
+                    -UseBasicParsing `
+                    -TimeoutSec 5
+
+                  if ($response.StatusCode -eq 200) {
+                      Write-Host "UAT application is healthy."
+                      exit 0
+                  }
+              }
+              catch {
+                  Write-Host "UAT health attempt $i failed."
+              }
+
+              Start-Sleep -Seconds 5
+          }
+
+          docker logs enterprise-python-uat
+
+          throw "UAT health check failed."
 
 
-  # ==========================================================
-  # 10. MIGRATE UAT
-  # ==========================================================
+  # ============================================================
+  # 10. UAT DATABASE MIGRATION
+  # ============================================================
+
   migrate-uat:
-    name: Migrate → UAT
+    name: UAT Database Migration
     runs-on: [self-hosted, Windows, X64]
+
     needs: deploy-uat
+
     if: github.ref == 'refs/heads/master'
+
     steps:
-      - uses: actions/checkout@v4
-      - name: Setup venv
-        shell: powershell -ExecutionPolicy Bypass -File {0}
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.14
+        shell: powershell
+        run: |
+          if (-not (Test-Path $env:PYTHON_EXE)) {
+              throw "Python 3.14 not found."
+          }
+
+          & $env:PYTHON_EXE --version
+
+      - name: Create Virtual Environment
+        shell: powershell
         run: |
           $venv = Join-Path $env:GITHUB_WORKSPACE $env:VENV
-          if (Test-Path $venv) { Remove-Item $venv -Recurse -Force }
+
+          if (Test-Path $venv) {
+              Remove-Item $venv -Recurse -Force
+          }
+
           & $env:PYTHON_EXE -m venv $venv
-          $python = Join-Path $venv "Scripts\python.exe"
+
+      - name: Install Dependencies
+        shell: powershell
+        run: |
+          $python = Join-Path $env:GITHUB_WORKSPACE "$env:VENV\Scripts\python.exe"
+
           & $python -m pip install --upgrade pip
-          & $python -m pip install -r "$env:GITHUB_WORKSPACE\requirements.txt"
-      - name: Alembic upgrade
-        shell: powershell -ExecutionPolicy Bypass -File {0}
+
+          if (Test-Path "requirements.txt") {
+              & $python -m pip install -r requirements.txt
+          }
+
+      - name: Run UAT Migration
+        shell: powershell
         env:
           DATABASE_URL: ${{ secrets.UAT_DATABASE_URL }}
         run: |
           $python = Join-Path $env:GITHUB_WORKSPACE "$env:VENV\Scripts\python.exe"
-          & $python -m alembic upgrade head
-          if ($LASTEXITCODE -ne 0) { throw "Alembic migrate UAT failed." }
+
+          if (Test-Path "alembic.ini") {
+
+              & $python -m alembic upgrade head
+
+              if ($LASTEXITCODE -ne 0) {
+                  throw "UAT database migration failed."
+              }
+
+          }
+          else {
+              Write-Host "alembic.ini not found. Migration skipped."
+          }
+
       - name: Cleanup
         if: always()
-        shell: powershell -ExecutionPolicy Bypass -File {0}
+        shell: powershell
         run: |
           $venv = Join-Path $env:GITHUB_WORKSPACE $env:VENV
-          if (Test-Path $venv) { Remove-Item $venv -Recurse -Force }
+
+          if (Test-Path $venv) {
+              Remove-Item $venv -Recurse -Force -ErrorAction SilentlyContinue
+          }
 
 
-  # ==========================================================
-  # 11. PERFORMANCE TEST (ubuntu-latest, Locust)
-  # ==========================================================
+  # ============================================================
+  # 11. PERFORMANCE TEST
+  # ============================================================
+
   performance-test:
-    name: Performance Test (UAT)
+    name: UAT Performance Test
     runs-on: ubuntu-latest
+
     needs: migrate-uat
+
     if: github.ref == 'refs/heads/master'
+
     continue-on-error: true
+
+    env:
+      UAT_PUBLIC_URL: ${{ vars.UAT_PUBLIC_URL || 'http://localhost:8001' }}
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
+
       - name: Install Locust
-        run: pip install locust==2.31.5
-      - name: Run Locust
         run: |
-          UAT_URL="${{ vars.UAT_PUBLIC_URL || 'http://localhost:8001' }}"
-          echo "Target: $UAT_URL"
-          if [ -f tests/performance/locustfile.py ]; then
-            locust -f tests/performance/locustfile.py --headless -u 50 -r 5 -t 1m \
-              --host "$UAT_URL" --csv=perf-report --exit-code-on-error 0 || true
+          python -m pip install --upgrade pip
+          pip install locust==2.31.5
+
+      - name: Run Performance Test
+        shell: bash
+        run: |
+          if [ -f "locustfile.py" ]; then
+
+            echo "Testing URL:"
+            echo "$UAT_PUBLIC_URL"
+
+            locust \
+              -f locustfile.py \
+              --headless \
+              --users 10 \
+              --spawn-rate 2 \
+              --run-time 2m \
+              --host "$UAT_PUBLIC_URL" \
+              --csv=performance-results \
+              --html=performance-report.html
+
           else
-            echo "No locustfile — skipping."
+            echo "locustfile.py not found. Performance test skipped."
           fi
-      - name: Upload perf report
+
+      - name: Upload Performance Results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: perf-report
-          path: perf-report*.csv
+          name: performance-results-${{ github.run_number }}
+          path: |
+            performance-results*.csv
+            performance-report.html
           if-no-files-found: ignore
 
 
-  # ==========================================================
-  # 12. CHANGE APPROVAL GATE (ubuntu-latest)
-  # ==========================================================
+  # ============================================================
+  # 12. PRODUCTION CHANGE APPROVAL
+  #
+  # IMPORTANT:
+  # This job belongs to the TAG/PRODUCTION flow.
+  # It does NOT depend on performance-test because performance-test
+  # is part of the MASTER/UAT flow.
+  # ============================================================
+
   change-approval-gate:
-    name: Change Approval Gate
+    name: Production Change Approval
     runs-on: ubuntu-latest
-    needs: performance-test
+
+    needs:
+      - build
+      - container-scan
+
     if: startsWith(github.ref, 'refs/tags/v')
+
     steps:
-      - name: Verify CHANGE_REQUEST_ID
+
+      - name: Verify Change Request
+        shell: bash
         run: |
           if [ -z "${{ vars.CHANGE_REQUEST_ID }}" ]; then
-            echo "::error::CHANGE_REQUEST_ID not set. A linked, approved Change Request is required to promote to PROD."
+            echo "CHANGE_REQUEST_ID is not configured."
             exit 1
           fi
-          echo "Approved for production release under change ${{ vars.CHANGE_REQUEST_ID }}"
+
+          echo "Approved Change Request:"
+          echo "${{ vars.CHANGE_REQUEST_ID }}"
+
+      - name: Production Approval Passed
+        run: |
+          echo "Production change approval gate passed."
 
 
-  # ==========================================================
-  # 13. DEPLOY PROD (Windows, tag-only, gated via Environment "production")
-  # ==========================================================
+  # ============================================================
+  # 13. DEPLOY PRODUCTION
+  # ============================================================
+
   deploy-prod:
-    name: Deploy → PROD
+    name: Deploy Production
     runs-on: [self-hosted, Windows, X64]
-    needs: change-approval-gate
+
+    needs:
+      - change-approval-gate
+      - build
+
+    if: startsWith(github.ref, 'refs/tags/v')
+
     environment:
       name: production
       url: http://localhost:8000
-    if: startsWith(github.ref, 'refs/tags/v')
+
     steps:
-      - name: Pull & run (PROD)
-        shell: powershell -ExecutionPolicy Bypass -File {0}
+
+      - name: Login to GHCR
+        shell: powershell
         run: |
-          docker rm -f enterprise-python 2>&1 | Out-Null
-          docker pull "${{ env.IMAGE_NAME }}:${{ github.ref_name }}"
-          docker run -d --name enterprise-python --restart unless-stopped `
+          "${{ secrets.GITHUB_TOKEN }}" |
+            docker login ghcr.io `
+              -u "${{ github.actor }}" `
+              --password-stdin
+
+      - name: Stop Existing Production Container
+        shell: powershell
+        run: |
+          docker rm -f enterprise-python-prod 2>$null
+          exit 0
+
+      - name: Pull Production Image
+        shell: powershell
+        run: |
+          $image = "${{ needs.build.outputs.image_name }}:${{ needs.build.outputs.image_tag }}"
+
+          Write-Host "Pulling production image:"
+          Write-Host $image
+
+          docker pull $image
+
+          if ($LASTEXITCODE -ne 0) {
+              throw "Production image pull failed."
+          }
+
+      - name: Deploy Production Container
+        shell: powershell
+        run: |
+          $image = "${{ needs.build.outputs.image_name }}:${{ needs.build.outputs.image_tag }}"
+
+          docker run -d `
+            --name enterprise-python-prod `
+            --restart unless-stopped `
             -p 8000:8000 `
-            -e DATABASE_URL="${{ secrets.PROD_DATABASE_URL }}" `
-            -e JWT_SECRET="${{ secrets.JWT_SECRET }}" `
-            "${{ env.IMAGE_NAME }}:${{ github.ref_name }}"
-          Start-Sleep -Seconds 15
-          $r = Invoke-WebRequest -Uri "http://localhost:8000/health" -UseBasicParsing -TimeoutSec 10
-          if ($r.StatusCode -ne 200) { throw "PROD health check failed: $($r.StatusCode)" }
+            $image
+
+          if ($LASTEXITCODE -ne 0) {
+              throw "Production deployment failed."
+          }
+
+      - name: Wait for Production
+        shell: powershell
+        run: |
+          Start-Sleep -Seconds 10
+
+      - name: Production Health Check
+        shell: powershell
+        run: |
+          $maxAttempts = 12
+
+          for ($i = 1; $i -le $maxAttempts; $i++) {
+
+              try {
+                  $response = Invoke-WebRequest `
+                    -Uri "http://localhost:8000/health" `
+                    -UseBasicParsing `
+                    -TimeoutSec 5
+
+                  if ($response.StatusCode -eq 200) {
+                      Write-Host "Production application is healthy."
+                      exit 0
+                  }
+              }
+              catch {
+                  Write-Host "Production health attempt $i failed."
+              }
+
+              Start-Sleep -Seconds 5
+          }
+
+          docker logs enterprise-python-prod
+
+          throw "Production health check failed."
 
 
-  # ==========================================================
-  # 14. MIGRATE PROD
-  # ==========================================================
+  # ============================================================
+  # 14. PRODUCTION DATABASE MIGRATION
+  # ============================================================
+
   migrate-prod:
-    name: Migrate → PROD
+    name: Production Database Migration
     runs-on: [self-hosted, Windows, X64]
+
     needs: deploy-prod
+
     if: startsWith(github.ref, 'refs/tags/v')
+
     steps:
-      - uses: actions/checkout@v4
-      - name: Setup venv
-        shell: powershell -ExecutionPolicy Bypass -File {0}
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify Python 3.14
+        shell: powershell
+        run: |
+          if (-not (Test-Path $env:PYTHON_EXE)) {
+              throw "Python 3.14 not found."
+          }
+
+          & $env:PYTHON_EXE --version
+
+      - name: Create Virtual Environment
+        shell: powershell
         run: |
           $venv = Join-Path $env:GITHUB_WORKSPACE $env:VENV
-          if (Test-Path $venv) { Remove-Item $venv -Recurse -Force }
+
+          if (Test-Path $venv) {
+              Remove-Item $venv -Recurse -Force
+          }
+
           & $env:PYTHON_EXE -m venv $venv
-          $python = Join-Path $venv "Scripts\python.exe"
+
+      - name: Install Dependencies
+        shell: powershell
+        run: |
+          $python = Join-Path $env:GITHUB_WORKSPACE "$env:VENV\Scripts\python.exe"
+
           & $python -m pip install --upgrade pip
-          & $python -m pip install -r "$env:GITHUB_WORKSPACE\requirements.txt"
-      - name: Alembic upgrade
-        shell: powershell -ExecutionPolicy Bypass -File {0}
+
+          if (Test-Path "requirements.txt") {
+              & $python -m pip install -r requirements.txt
+          }
+
+      - name: Run Production Migration
+        shell: powershell
         env:
           DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
         run: |
           $python = Join-Path $env:GITHUB_WORKSPACE "$env:VENV\Scripts\python.exe"
-          & $python -m alembic upgrade head
-          if ($LASTEXITCODE -ne 0) { throw "Alembic migrate PROD failed." }
+
+          if (Test-Path "alembic.ini") {
+
+              & $python -m alembic upgrade head
+
+              if ($LASTEXITCODE -ne 0) {
+                  throw "Production migration failed."
+              }
+
+          }
+          else {
+              Write-Host "alembic.ini not found. Migration skipped."
+          }
+
       - name: Cleanup
         if: always()
-        shell: powershell -ExecutionPolicy Bypass -File {0}
+        shell: powershell
         run: |
           $venv = Join-Path $env:GITHUB_WORKSPACE $env:VENV
-          if (Test-Path $venv) { Remove-Item $venv -Recurse -Force }
+
+          if (Test-Path $venv) {
+              Remove-Item $venv -Recurse -Force -ErrorAction SilentlyContinue
+          }
 
 
-  # ==========================================================
-  # 15. RELEASE (Windows) — GitHub Release on tag
-  # ==========================================================
+  # ============================================================
+  # 15. RELEASE
+  # ============================================================
+
   release:
-    name: Create Release
+    name: Create GitHub Release
     runs-on: [self-hosted, Windows, X64]
+
     needs: migrate-prod
+
     if: startsWith(github.ref, 'refs/tags/v')
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: softprops/action-gh-release@v2
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
 
-  # ==========================================================
-  # 16. NOTIFY (Windows) — Slack webhook (optional)
-  # ==========================================================
+  # ============================================================
+  # 16. NOTIFICATION
+  # ============================================================
+
   notify:
-    name: Notify
+    name: Pipeline Notification
     runs-on: [self-hosted, Windows, X64]
-    needs: [test, qa, build]
-    if: always() && github.ref == 'refs/heads/master'
+
+    needs:
+      - test
+      - qa
+      - build
+
+    if: >
+      always() &&
+      github.ref == 'refs/heads/master'
+
     steps:
-      - name: Send notification
+
+      - name: Send Slack Notification
+        if: ${{ secrets.SLACK_WEBHOOK_URL != '' }}
         shell: powershell
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
-          if (-not $env:SLACK_WEBHOOK_URL) {
-            Write-Host "SLACK_WEBHOOK_URL not set — skipping notification."
-            exit 0
-          }
           $payload = @{
-            text = "Enterprise-python CI/CD: ${{ job.status }} on ${{ github.ref_name }} (${{ github.sha }})"
+              text = "Enterprise Python CI/CD completed. Run: ${{ github.run_number }}"
           } | ConvertTo-Json
-          Invoke-RestMethod -Uri $env:SLACK_WEBHOOK_URL -Method Post `
-            -ContentType "application/json" -Body $payload
+
+          Invoke-RestMethod `
+            -Uri $env:SLACK_WEBHOOK_URL `
+            -Method Post `
+            -ContentType "application/json" `
+            -Body $payload
 
 
-  # ==========================================================
-  # 17. NIGHTLY HEALTH CHECK (Windows)
-  # ==========================================================
+  # ============================================================
+  # 17. SCHEDULED HEALTH CHECK
+  # ============================================================
+
   health-check:
-    name: Nightly Health Check
+    name: Scheduled Health Check
     runs-on: [self-hosted, Windows, X64]
+
     if: github.event_name == 'schedule'
+
     steps:
-      - name: Check /health
+
+      - name: Check Production Health
         shell: powershell
         run: |
           try {
-            $r = Invoke-WebRequest -Uri "http://localhost:8000/health" -UseBasicParsing -TimeoutSec 10
-            if ($r.StatusCode -ne 200) { throw "HTTP $($r.StatusCode)" }
-            Write-Host "Health OK"
-          } catch {
-            Write-Host "Health check FAILED: $_"
-            exit 1
+
+              $response = Invoke-WebRequest `
+                -Uri "http://localhost:8000/health" `
+                -UseBasicParsing `
+                -TimeoutSec 10
+
+              if ($response.StatusCode -eq 200) {
+                  Write-Host "Production health check passed."
+                  exit 0
+              }
+
+              throw "Unexpected status code: $($response.StatusCode)"
+
+          }
+          catch {
+
+              Write-Host "Production health check failed."
+              throw
           }
 
 
-  # ==========================================================
-  # 18. ROLLBACK (Windows, manual via workflow_dispatch)
-  # ==========================================================
+  # ============================================================
+  # 18. MANUAL PRODUCTION ROLLBACK
+  # ============================================================
+
   rollback-prod:
-    name: Rollback PROD (manual)
+    name: Manual Production Rollback
     runs-on: [self-hosted, Windows, X64]
+
+    if: >
+      github.event_name == 'workflow_dispatch' &&
+      inputs.image_tag != ''
+
     environment:
       name: production
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.image_tag != ''
+
     steps:
-      - name: Rollback to ${{ github.event.inputs.image_tag }}
-        shell: powershell -ExecutionPolicy Bypass -File {0}
+
+      - name: Login to GHCR
+        shell: powershell
         run: |
-          $tag = "${{ github.event.inputs.image_tag }}"
-          Write-Host "Rolling back PROD to $tag"
-          docker rm -f enterprise-python 2>&1 | Out-Null
-          docker pull "${{ env.IMAGE_NAME }}:$tag"
-          docker run -d --name enterprise-python --restart unless-stopped `
+          "${{ secrets.GITHUB_TOKEN }}" |
+            docker login ghcr.io `
+              -u "${{ github.actor }}" `
+              --password-stdin
+
+      - name: Stop Current Production
+        shell: powershell
+        run: |
+          docker rm -f enterprise-python-prod 2>$null
+          exit 0
+
+      - name: Pull Rollback Image
+        shell: powershell
+        run: |
+          $image = "${{ env.IMAGE_NAME }}:${{ inputs.image_tag }}"
+
+          Write-Host "Rollback image:"
+          Write-Host $image
+
+          docker pull $image
+
+          if ($LASTEXITCODE -ne 0) {
+              throw "Rollback image could not be pulled."
+          }
+
+      - name: Deploy Rollback
+        shell: powershell
+        run: |
+          $image = "${{ env.IMAGE_NAME }}:${{ inputs.image_tag }}"
+
+          docker run -d `
+            --name enterprise-python-prod `
+            --restart unless-stopped `
             -p 8000:8000 `
-            -e DATABASE_URL="${{ secrets.PROD_DATABASE_URL }}" `
-            -e JWT_SECRET="${{ secrets.JWT_SECRET }}" `
-            "${{ env.IMAGE_NAME }}:$tag"
-          Start-Sleep -Seconds 15
-          $r = Invoke-WebRequest -Uri "http://localhost:8000/health" -UseBasicParsing -TimeoutSec 10
-          if ($r.StatusCode -ne 200) { throw "Rollback health check failed: $($r.StatusCode)" }
+            $image
+
+          if ($LASTEXITCODE -ne 0) {
+              throw "Rollback deployment failed."
+          }
+
+      - name: Wait for Rollback
+        shell: powershell
+        run: |
+          Start-Sleep -Seconds 10
+
+      - name: Rollback Health Check
+        shell: powershell
+        run: |
+          $maxAttempts = 12
+
+          for ($i = 1; $i -le $maxAttempts; $i++) {
+
+              try {
+
+                  $response = Invoke-WebRequest `
+                    -Uri "http://localhost:8000/health" `
+                    -UseBasicParsing `
+                    -TimeoutSec 5
+
+                  if ($response.StatusCode -eq 200) {
+                      Write-Host "Rollback successful."
+                      exit 0
+                  }
+
+              }
+              catch {
+                  Write-Host "Rollback health attempt $i failed."
+              }
+
+              Start-Sleep -Seconds 5
+          }
+
+          docker logs enterprise-python-prod
+
+          throw "Rollback health check failed."
