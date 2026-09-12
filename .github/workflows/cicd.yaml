@@ -20,7 +20,7 @@ permissions:
   pull-requests: read
 
 env:
-  PYTHON_EXE: 'C:\Users\avaiza.shahid\AppData\Local\Programs\Python\Python314\python.exe'
+  PYTHON_EXE: 'C:\Users\avaiza.shahid\AppData\Local\Programs\Python\Python312\python.exe'
   VENV: '.ci-venv'
   IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/enterprise-python
 
